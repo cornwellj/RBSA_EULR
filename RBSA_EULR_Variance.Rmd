@@ -1,0 +1,146 @@
+---
+title: "Untitled"
+author: "John Cornwell"
+date: "January 25, 2018"
+output: html_document
+---
+
+# Purpose
+The purpose of this script is to generate some preliminary stats and plots to look at variation in usage among end uses in the NEEA RBSA data to guide the EULR study sampling.
+
+Start with electric resistanc heating.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r , include=FALSE}
+#Package Setup
+x <- c("ggmap", "rgdal", "rgeos", "maptools","plyr", "dplyr", "tidyr", "reshape2", "xlsx", "XLConnect", "readxl", "lubridate")
+#install.packages(x) # warning: uncommenting this may take a number of minutes
+lapply(x, library, character.only = TRUE) # load the required packages
+```
+
+# Start with baseborad 
+```{r}
+#Import Files
+meter_er <- fread("RBSA_METER_DATA.csv", header = T, stringsAsFactors = F, select = c('siteid', 'time', 'ER', "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "WEEK", "WEEKEND", "WEEKDAY")) 
+## find homes with ER data and filter
+meter_er_summary_A <- meter_er %>% 
+  group_by(siteid) %>%
+  summarise(sum_er = sum(ER))
+
+meter_er_summary <- subset(meter_er_summary_A, !is.na(meter_er_summary$sum_er))
+meter_er_filter <- subset(meter_er, meter_er$siteid %in% meter_er_summary$siteid)
+```
+
+```{r}
+# Analysis
+# select winter months (Oct-MAR)
+
+meter_er_winter <- subset(meter_er_filter, meter_er_filter$MONTH > 9 | meter_er_filter$MONTH < 4)
+meter_er_w_day_load <- meter_er_winter %>%
+                        group_by(siteid, HOUR) %>%
+                        summarise(mean_h = mean(ER))
+
+meter_er_w_day_load_s <- meter_er_w_day_load %>% 
+                          group_by(HOUR) %>%
+                          summarise(mean_h_s = mean(mean_h, na.rm = T),
+                                    sd_h_s = sd(mean_h, na.rm = T),
+                                    min_h_s = min(mean_h),
+                                    max_h_s = max(mean_h))
+meter_er_w_day_load_s$upper_sd <- meter_er_w_day_load_s$mean_h_s + meter_er_w_day_load_s$sd_h_s
+meter_er_w_day_load_s$lower_sd <- meter_er_w_day_load_s$mean_h_s - meter_er_w_day_load_s$sd_h_s
+
+meter_day_sum <- meter_er_winter %>%
+                  group_by(siteid, YEAR, MONTH, DAY) %>%
+                  summarise(daysum_ER = sum(ER))
+
+meter_avg_day <- meter_day_sum %>%
+                  group_by(siteid) %>%
+                  summarise(daily_ER = mean(daysum_ER))
+
+meter_avg_day$scaled <- scale(meter_avg_day$daily_ER, center = T, scale = F)
+meter_avg_day$ER_z <- scale(meter_avg_day$scaled, center = T, scale = T)
+
+z_table <- select(meter_er_summary_A, siteid)
+z_table <- merge(z_table, meter_avg_day[ , c("siteid", "ER_z")], by = "siteid", all.x = T )
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+theme_set((theme_classic()))
+
+ggplot(meter_er_w_day_load, aes(x=HOUR, col = factor(siteid))) +
+  geom_line(aes(y=mean_h))
+
+ggplot(meter_er_w_day_load_s) +
+  geom_line(aes(x=HOUR, y=mean_h_s), size = 2) +
+  geom_ribbon(aes(x=HOUR, ymax = mean_h_s + sd_h_s, ymin = mean_h_s - sd_h_s, alpha = 0.2)) +
+  geom_line(aes(x=HOUR, y=max_h_s)) +
+  geom_line(aes(x=HOUR, y=min_h_s)) +
+  coord_cartesian(ylim=c(0, .8))
+
+# dumbell chart of distribution around Z
+```
+# Start with baseborad 
+```{r}
+#Import Files
+meter_ac <- fread("RBSA_METER_DATA.csv", header = T, stringsAsFactors = F, select = c('siteid', 'time', 'AC', "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "WEEK", "WEEKEND", "WEEKDAY")) 
+## find homes with ER data and filter
+meter_ac_summary_A <- meter_ac %>% 
+  group_by(siteid) %>%
+  summarise(sum_ac = sum(AC))
+
+meter_ac_summary <- subset(meter_ac_summary_A, !is.na(meter_ac_summary_A$sum_ac))
+meter_ac_filter <- subset(meter_ac, meter_ac$siteid %in% meter_ac_summary$siteid)
+```
+
+```{r}
+# Analysis
+# select winter months (Oct-MAR)
+
+meter_ac_summer <- subset(meter_ac_filter, meter_ac_filter$MONTH > 3 & meter_ac_filter$MONTH < 10)
+meter_ac_w_day_load <- meter_ac_summer %>%
+                        group_by(siteid, HOUR) %>%
+                        summarise(mean_h = mean(AC))
+
+meter_ac_w_day_load_s <- meter_ac_w_day_load %>% 
+                          group_by(HOUR) %>%
+                          summarise(mean_h_s = mean(mean_h, na.rm = T),
+                                    sd_h_s = sd(mean_h, na.rm = T),
+                                    min_h_s = min(mean_h),
+                                    max_h_s = max(mean_h))
+meter_ac_w_day_load_s$upper_sd <- meter_ac_w_day_load_s$mean_h_s + meter_ac_w_day_load_s$sd_h_s
+meter_ac_w_day_load_s$lower_sd <- meter_ac_w_day_load_s$mean_h_s - meter_ac_w_day_load_s$sd_h_s
+
+meter_day_sum <- meter_ac_summer %>%
+                  group_by(siteid, YEAR, MONTH, DAY) %>%
+                  summarise(daysum_ac = sum(AC))
+
+meter_avg_day <- meter_day_sum %>%
+                  group_by(siteid) %>%
+                  summarise(daily_ac = mean(daysum_ac))
+
+meter_avg_day$scaled <- scale(meter_avg_day$daily_ac, center = T, scale = F)
+meter_avg_day$ac_z <- scale(meter_avg_day$scaled, center = T, scale = T)
+
+z_table <- merge(z_table, meter_avg_day[ , c("siteid", "ac_z")], by = "siteid", all.x = T )
+
+```
+
+``` {r}
+ztable_l <- gather(z_table, Measure, Z_score, ER_z:ac_z)
+
+ggplot(ztable_l, aes(x = Measure, y = Z_score)) +
+      geom_bar(stat='identity', width = .6) +
+      coord_flip() +
+      theme_classic() +
+     theme(plot.title = element_text(hjust = .5), 
+                                    axis.ticks = element_blank()) +   # Centre plot title
+                              scale_fill_brewer(palette = "Dark2")  # Color palette
+```
