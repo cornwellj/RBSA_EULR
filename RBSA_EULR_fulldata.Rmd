@@ -1,0 +1,302 @@
+---
+title: "Untitled"
+author: "John Cornwell"
+date: "January 25, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Purpose
+The purpose of this script is to generate some preliminary stats and plots to look at variation in usage among end uses in the NEEA RBSA data to guide the EULR study sampling.
+
+## call packages.
+```{r , include=FALSE}
+#Package Setup
+x <- c("ggmap", "rgdal", "rgeos", "maptools","plyr", "dplyr", "tidyr", "reshape2", "xlsx", "XLConnect", "readxl", "lubridate", "data.table", "stringr")
+#install.packages(x) # warning: uncommenting this may take a number of minutes
+lapply(x, library, character.only = TRUE) # load the required packages
+```
+
+## laod full data
+```{r}
+#Import Files
+meter_data <- fread("RBSA_METER_DATA.csv", header = T, stringsAsFactors = F)
+# meter_er <- fread("RBSA_METER_DATA.csv", header = T, stringsAsFactors = F, select = c('siteid', 'time', 'ER', "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "WEEK", "WEEKEND", "WEEKDAY")) 
+## find homes with ER data and filter
+# meter_er_summary_A <- meter_er %>% 
+#   group_by(siteid) %>%
+#   summarise(sum_er = sum(ER))
+# 
+# meter_er_summary <- subset(meter_er_summary_A, !is.na(meter_er_summary$sum_er))
+# meter_er_filter <- subset(meter_er, meter_er$siteid %in% meter_er_summary$siteid)
+
+meter_data_y2 <- fread("RBSAM Year 2.txt", header = T, stringsAsFactors = F)
+sitedata1 <- read.xlsx("SFMaster_housegeometry.xlsx", sheetIndex = 1) 
+sitedata2 <- read.xlsx("SFMaster_location.xlsx", sheetIndex = 1) 
+sitedata3 <- read.xlsx("2011 RBSA Single Family Database (Excel)/SFMaster_populations.xlsx", sheetIndex = 1)
+sitedata4 <- read.xlsx("2011 RBSA Single Family Database (Excel)/SFwheater.xlsx", sheetIndex = 1)
+sitedata5 <- read.xlsx("2011 RBSA Single Family Database (Excel)/SF_ri_demog.xlsx", sheetIndex = 1)
+sitedata6 <- read.xlsx("2011 RBSA Single Family Database (Excel)/SF_ri_heu.xlsx", sheetIndex = 1)
+sitedata7 <- read.xlsx("2011 RBSA Single Family Database (Excel)/SFshowerhead.xlsx", sheetIndex = 1)
+sitedata7 <- read.xlsx("2011 RBSA Single Family Database (Excel)/HVACcooling.xlsx", sheetIndex = 1)
+sitedata7 <- read.xlsx("2011 RBSA Single Family Database (Excel)/HVACheating.xlsx", sheetIndex = 1)
+sitedata7 <- read.xlsx("2011 RBSA Single Family Database (Excel)/SFblowerdoor.xlsx", sheetIndex = 1)
+sitedata7 <- read.xlsx("2011 RBSA Single Family Database (Excel)/SFatticceiling.xlsx", sheetIndex = 1)
+sitedata7 <- read.xlsx("2011 RBSA Single Family Database (Excel)/SFducts.xlsx", sheetIndex = 1)
+sitedata7 <- read.xlsx("2011 RBSA Single Family Database (Excel)/SFflbasement.xlsx", sheetIndex = 1)
+sitedata7 <- read.xlsx("2011 RBSA Single Family Database (Excel)/SFflcrawl.xlsx", sheetIndex = 1)
+sitedata7 <- read.xlsx("2011 RBSA Single Family Database (Excel)/SFframedwall.xlsx", sheetIndex = 1)
+
+
+
+```
+
+## remove columns we don't need
+```{r}
+cols_keep <- names(meter_data)
+cols_remove <- c(4:11, 13:15, 17:35, 39:40, 43, 46:56, 58:73, 77:95, 97:139, 141:156, 158:162, 164:176, 180:189, 192:193, 195:199, 202:222)
+cols_keep <- cols_keep[-cols_remove]
+meter_data2 <- as.data.frame(meter_data)
+meter_data2 <- meter_data2[ ,cols_keep]
+
+### gather columns into rows with measure names
+meter_data3 <- gather(meter_data2, key = "measure", value = "kw", 3:28)
+meter_data3 <- subset(meter_data3, !is.na(meter_data3$kw))
+meter_data3$date <- dmy_hms(meter_data3$time)
+meter_data3$date2 <- as_date(meter_data3$date)
+meter_data3$hour <- hour(meter_data3$date)
+
+meter_data3 <- data.table(meter_data3)
+## extract temp data and get mean hourly from 15 minute data for each home / measure / hour .
+meter_data_temp <- meter_data3[meter_data3$measure == "ODT" | meter_data3$measure == "IDT" | meter_data3$measure == "WST" , ]
+meter_data_temp_h <- meter_data_temp[,list(temp=mean(kw)),by=list(siteid,measure,date2,hour), verbose = TRUE] 
+meter_data_temp <- spread(meter_data_temp_h, measure, temp)
+rm(meter_data_temp_h)
+
+## sum hourly from 15 minute data for each home / measure / hour .
+meter_data3 <- meter_data3[meter_data3$measure != "ODT" & meter_data3$measure != "IDT" & meter_data3$measure != "WST" , ]
+meter_data3_h <- meter_data3[,list(kw_h=sum(kw)),by=list(siteid,measure,date2,hour), verbose = TRUE] 
+rm(meter_data3)
+
+## spread data so there is one row per hour with variables for measures
+meter_data_wide <- spread(meter_data3_h, measure, kw_h)
+rm(meter_data3_h)
+## combine measure and temp data
+meter_data_final <- left_join(meter_data_wide, meter_data_temp, by = c("siteid", "date2", "hour"))
+rm(meter_data_temp, meter_data_wide, meter_data2)
+write.csv(meter_data_final, "meter_data_final.csv")
+rm(meter_data, meter_data_final)
+## add in site characteristics data
+
+
+## create season flags
+meter_data3_h$season <-  ifelse(month(meter_data3_h$date2) > 5 & month(meter_data3_h$date2) < 9, "SUMMER",NA)
+meter_data3_h$season <-  ifelse(month(meter_data3_h$date2) > 8 & month(meter_data3_h$date2) < 12, "FALL",meter_data3_h$season)
+meter_data3_h$season <-  ifelse(month(meter_data3_h$date2) == 12 | month(meter_data3_h$date2) < 3, "WINTER",meter_data3_h$season)
+meter_data3_h$season <-  ifelse(month(meter_data3_h$date2) > 2 & month(meter_data3_h$date2) < 6, "SPRING",meter_data3_h$season)
+
+## create datasets for aggregate daily loadshapes per house for each season and all year.
+
+meter_data3_h_an <- meter_data3_h[,list(kw_h=mean(kw_h)),by=list(siteid, measure,hour), verbose = TRUE] 
+meter_data3_h_season <- meter_data3_h[,list(kw_h=mean(kw_h)),by=list(siteid, measure, season, hour), verbose = TRUE] 
+meter_data3_h_an$season <- NA
+
+## create master summary dataset that includes hourly load shape data for each period/site/measure. periods are annual, summer, spring, fall, winter.
+
+meterdata_summary_hrs <- rbind(meter_data3_h_an, meter_data3_h_season)
+meterdata_summary_hrs$season[is.na(meterdata_summary_hrs$season)] <- "ANNUAL"
+
+## create datasets with mean daily total use by period / site / measure.
+meterdata_summary_day <- meterdata_summary_hrs[,list(kwh=sum(kw_h)), by=list(siteid,season, measure), verbose = TRUE] 
+
+```
+
+#Now have two datasets 
+1) meterdata_summary_hrs - Average daily load shape (24 hour observations, per season, site, measure. 
+2) meterdata_summary_day - Average daily total by season, site, measure. 
+
+#For now we are only interested in 6 measure types: DHP, Ducted HEat Pump, Water heaters, electric baseboard heat, electric furnace, and CAC. Also included PTAC and PTHP. For this analysis we will select the columns for these rows only along with weather and total consumption variable. 
+
+```{r}
+## select measures of interest
+keep <- c("AC", "DHP", "DHW_1", "DHW_2", "DHW_HP", "ER", "ER_2", "ER_3", "ER_4", "ER_5", "GSHP_in", "GSHP_out", "HP_in", "HP_in_2", "HP_out", "HP_out_2", "HP_VLT", "IDT", "ODT", "Service", "WST", "Furn", "PTAC", "PTHP")
+
+meterdata_summary_hrs_analysis <- meterdata_summary_hrs[meterdata_summary_hrs$measure %in% keep, ]
+meterdata_summary_day_analysis <- meterdata_summary_day[meterdata_summary_day$measure %in% keep, ]    
+
+## sum values for DHW, ER, GSHP, HP, for hourly database
+meterdata_summary_hrs_analysis$measure2 <- NA
+meterdata_summary_hrs_analysis$measure2 <- ifelse(meterdata_summary_hrs_analysis$measure == "DHW_1" | meterdata_summary_hrs_analysis$measure == "DHW_2", "DHW", meterdata_summary_hrs_analysis$measure2)
+meterdata_summary_hrs_analysis$measure2 <- ifelse(str_detect(meterdata_summary_hrs_analysis$measure, "ER") == TRUE, "ER", meterdata_summary_hrs_analysis$measure2)
+meterdata_summary_hrs_analysis$measure2 <- ifelse(str_detect(meterdata_summary_hrs_analysis$measure, "GSHP") == TRUE, "GSHP", meterdata_summary_hrs_analysis$measure2)
+meterdata_summary_hrs_analysis$measure2 <- ifelse(meterdata_summary_hrs_analysis$measure == "HP_in" | meterdata_summary_hrs_analysis$measure == "HP_in_2"| meterdata_summary_hrs_analysis$measure == "HP_out"| meterdata_summary_hrs_analysis$measure == "HP_out_2", "HP", meterdata_summary_hrs_analysis$measure2)
+meterdata_summary_hrs_analysis$measure2 <- ifelse(is.na(meterdata_summary_hrs_analysis$measure2),meterdata_summary_hrs_analysis$measure , meterdata_summary_hrs_analysis$measure2)
+meterdata_summary_hrs_analysis <- meterdata_summary_hrs_analysis[,list(kw_h2=sum(kw_h)),by=list(siteid,season,measure2,hour), verbose = TRUE] 
+
+## sum values for DHW, ER, GSHP, HP, for daily database
+meterdata_summary_day_analysis$measure2 <- NA
+meterdata_summary_day_analysis$measure2 <- ifelse(meterdata_summary_day_analysis$measure == "DHW_1" | meterdata_summary_day_analysis$measure == "DHW_2", "DHW", meterdata_summary_day_analysis$measure2)
+meterdata_summary_day_analysis$measure2 <- ifelse(str_detect(meterdata_summary_day_analysis$measure, "ER") == TRUE, "ER", meterdata_summary_day_analysis$measure2)
+meterdata_summary_day_analysis$measure2 <- ifelse(str_detect(meterdata_summary_day_analysis$measure, "GSHP") == TRUE, "GSHP", meterdata_summary_day_analysis$measure2)
+meterdata_summary_day_analysis$measure2 <- ifelse(meterdata_summary_day_analysis$measure == "HP_in" | meterdata_summary_day_analysis$measure == "HP_in_2"| meterdata_summary_day_analysis$measure == "HP_out"| meterdata_summary_day_analysis$measure == "HP_out_2", "HP", meterdata_summary_day_analysis$measure2)
+meterdata_summary_day_analysis$measure2 <- ifelse(is.na(meterdata_summary_day_analysis$measure2),meterdata_summary_day_analysis$measure , meterdata_summary_day_analysis$measure2)
+meterdata_summary_day_analysis <- meterdata_summary_day_analysis[,list(kwh2=sum(kwh)),by=list(siteid,season,measure2), verbose = TRUE] 
+
+```
+
+# Scale daily dataset values to z scores
+```{r}
+meterdata_summary_day_analysis_2 <- meterdata_summary_day_analysis %>% 
+                                    group_by(season, measure2)  %>%
+                                    mutate(kwh_z = scale(kwh2, center = T, scale = T))
+meterdata_summary_day_analysis_2 <- ungroup(meterdata_summary_day_analysis_2)
+
+## test plot to confirm scaleing worked.
+test <- filter(meterdata_summary_day_analysis_2, measure2 == "ER")
+
+ggplot(test[test$season == "WINTER", ], aes(x=kwh2, y=kwh_z)) +
+  geom_point()
+
+mean(test[test$season == "WINTER", ]$kwh2)
+```
+
+## Plots
+
+# Plot 1: zscore distribution charts
+```{r}
+keep <- c("AC", "DHP", "DHW", "ER", "HP", "Furn")
+zplotdata <- meterdata_summary_day_analysis_2[meterdata_summary_day_analysis_2$measure2 %in% keep, ]
+
+zplotdata$measure2 <- str_replace(zplotdata$measure2, "AC", "Central AC")
+zplotdata$measure2 <- str_replace(zplotdata$measure2, "DHP", "Ductless Heat Pump")
+zplotdata$measure2 <- str_replace(zplotdata$measure2, "DHW", "Hot Water Heater")
+zplotdata$measure2 <- str_replace(zplotdata$measure2, "ER", "Electric Baseboard Heat")
+zplotdata$measure2 <- str_replace(zplotdata$measure2, "HP", "Ducted Heat Pump")
+zplotdata$measure2 <- str_replace(zplotdata$measure2, "Furn", "Electric Furnace")
+colnames(zplotdata)[3] <- "Measure"
+colnames(zplotdata)[5] <- "Z_Score"
+
+#boxplot
+box <- ggplot(zplotdata, aes(x = Measure, y = Z_Score, fill = Measure)) +
+      geom_boxplot() +
+      stat_summary(fun.y = mean, geom = "errorbar", aes(ymax = ..y.., ymin = ..y..), width = .75, linetype = "dashed") + #dashed line at mean
+      coord_flip() +
+      theme_classic() +
+      theme(plot.title = element_text(hjust = .5), axis.ticks = element_blank(), legend.position = "none") +   # Centre plot title
+      scale_fill_brewer(palette = "YlGn") + # Color palette 
+    
+ggsave("box.pdf", width = 8, height = 5, units = "in", dpi = 1000)
+
+box2 <- ggplot(zplotdata[zplotdata$season != "ANNUAL", ], aes(x = Measure, y = Z_Score, fill = Measure)) +
+      geom_boxplot() +
+      coord_flip() +
+      theme_classic() +
+     theme(plot.title = element_text(hjust = .5), 
+                                    axis.ticks = element_blank(), legend.position = "none") +   # Centre plot title
+                              scale_fill_brewer(palette = "YlGn")  # Color palette
+box2 + facet_wrap( ~ season, ncol=2)
+ggsave("box_season.pdf", width = 8, height = 5, units = "in", dpi = 1000)
+
+#violin plot
+ggplot(zplotdata, aes(x = Measure, y = Z_Score, fill = Measure)) +
+      geom_violin() +
+  stat_summary(fun.y = mean, geom = "errorbar", aes(ymax = ..y.., ymin = ..y..), width = .75, linetype = "dashed") + #dashed line at mean
+      coord_flip() +
+      theme_classic() +
+     theme(plot.title = element_text(hjust = .5), 
+                                    axis.ticks = element_blank(), legend.position = "none") +   # Centre plot title
+                              scale_fill_brewer(palette = "YlGn")  # Color palette
+ggsave("violin.pdf", width = 8, height = 5, units = "in", dpi = 1000)
+
+v <- ggplot(zplotdata[zplotdata$season != "ANNUAL", ], aes(x = Measure, y = Z_Score, fill = Measure)) +
+      geom_violin() +
+  stat_summary(fun.y = mean, geom = "errorbar", aes(ymax = ..y.., ymin = ..y..), width = .75, linetype = "dashed") + #dashed line at mean
+      coord_flip() +
+      theme_classic() +
+     theme(plot.title = element_text(hjust = .5), 
+                                    axis.ticks = element_blank(), legend.position = "none") +   # Centre plot title
+                              scale_fill_brewer(palette = "YlGn")  # Color palette
+v + facet_wrap( ~ season, ncol=2)
+ggsave("violin.pdf", width = 8, height = 5, units = "in", dpi = 1000)
+
+```
+
+```{r pressure, echo=FALSE}
+
+meter_er_winter <- subset(meter_er_filter, meter_er_filter$MONTH > 9 | meter_er_filter$MONTH < 4)
+meter_er_w_day_load <- meter_er_winter %>%
+                        group_by(siteid, HOUR) %>%
+                        summarise(mean_h = mean(ER))
+
+meter_er_w_day_load_s <- meter_er_w_day_load %>% 
+                          group_by(HOUR) %>%
+                          summarise(mean_h_s = mean(mean_h, na.rm = T),
+                                    sd_h_s = sd(mean_h, na.rm = T),
+                                    min_h_s = min(mean_h),
+                                    max_h_s = max(mean_h))
+meter_er_w_day_load_s$upper_sd <- meter_er_w_day_load_s$mean_h_s + meter_er_w_day_load_s$sd_h_s
+meter_er_w_day_load_s$lower_sd <- meter_er_w_day_load_s$mean_h_s - meter_er_w_day_load_s$sd_h_s
+
+
+ER_plotdata <- meterdata_summary_hrs_analysis[meterdata_summary_hrs_analysis$measure2 == "ER" & meterdata_summary_hrs_analysis$season == "ANNUAL", ]
+
+ggplot(ER_plotdata) +
+  geom_line(aes(x=hour, y=kw_h2), size = 2) +
+  geom_ribbon(aes(x=hour, ymax = kw_h2 + sd_h_s, ymin = mean_h_s - sd_h_s, alpha = 0.2)) +
+  geom_line(aes(x=hour, y=kw_h2)) +
+  geom_line(aes(x=hour, y=kw_h2)) +
+  coord_cartesian(ylim=c(0, .8))
+
+```
+# Start with baseborad 
+```{r}
+#Import Files
+meter_ac <- fread("RBSA_METER_DATA.csv", header = T, stringsAsFactors = F, select = c('siteid', 'time', 'AC', "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "WEEK", "WEEKEND", "WEEKDAY")) 
+## find homes with ER data and filter
+meter_ac_summary_A <- meter_ac %>% 
+  group_by(siteid) %>%
+  summarise(sum_ac = sum(AC))
+
+meter_ac_summary <- subset(meter_ac_summary_A, !is.na(meter_ac_summary_A$sum_ac))
+meter_ac_filter <- subset(meter_ac, meter_ac$siteid %in% meter_ac_summary$siteid)
+```
+
+```{r}
+# Analysis
+# select winter months (Oct-MAR)
+
+meter_ac_summer <- subset(meter_ac_filter, meter_ac_filter$MONTH > 3 & meter_ac_filter$MONTH < 10)
+meter_ac_w_day_load <- meter_ac_summer %>%
+                        group_by(siteid, HOUR) %>%
+                        summarise(mean_h = mean(AC))
+
+meter_ac_w_day_load_s <- meter_ac_w_day_load %>% 
+                          group_by(HOUR) %>%
+                          summarise(mean_h_s = mean(mean_h, na.rm = T),
+                                    sd_h_s = sd(mean_h, na.rm = T),
+                                    min_h_s = min(mean_h),
+                                    max_h_s = max(mean_h))
+meter_ac_w_day_load_s$upper_sd <- meter_ac_w_day_load_s$mean_h_s + meter_ac_w_day_load_s$sd_h_s
+meter_ac_w_day_load_s$lower_sd <- meter_ac_w_day_load_s$mean_h_s - meter_ac_w_day_load_s$sd_h_s
+
+meter_day_sum <- meter_ac_summer %>%
+                  group_by(siteid, YEAR, MONTH, DAY) %>%
+                  summarise(daysum_ac = sum(AC))
+
+meter_avg_day <- meter_day_sum %>%
+                  group_by(siteid) %>%
+                  summarise(daily_ac = mean(daysum_ac))
+
+meter_avg_day$scaled <- scale(meter_avg_day$daily_ac, center = T, scale = F)
+meter_avg_day$ac_z <- scale(meter_avg_day$scaled, center = T, scale = T)
+
+z_table <- merge(z_table, meter_avg_day[ , c("siteid", "ac_z")], by = "siteid", all.x = T )
+
+
+```
+
+``` {r}
+```
